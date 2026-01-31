@@ -1,4 +1,5 @@
-﻿using Microsoft.Data.SqlClient;
+﻿using Dapper;
+using Microsoft.Data.SqlClient;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -22,9 +23,9 @@ namespace Czemi.DataMethods
         /// <returns>A <see cref="DataTable"/> containing the query results. If the query returns no rows, the <see
         /// cref="DataTable"/> will be empty.</returns>
         public static async Task<DataTable?> LoadDataTableAsync<T>(
-        string connectionString,
-        string query,
-        Dictionary<string, object>? parameters = null) where T : new()
+            string connectionString,
+            string query,
+            Dictionary<string, object>? parameters = null) where T : new()
         {
             List<T> records = new List<T>();
 
@@ -40,165 +41,138 @@ namespace Czemi.DataMethods
         }
 
         /// <summary>
-        /// Asynchronously retrieves a single record from a database and maps it to an object of type <typeparamref
-        /// name="T"/>.
+        /// Gets a record from a table
         /// </summary>
-        /// <remarks>This method opens a database connection, executes the provided query, and maps the
-        /// first result to an object of type <typeparamref name="T"/>. If no record is found, the method returns the
-        /// default value of <typeparamref name="T"/>. Exceptions are caught and displayed using <see
-        /// cref="System.Windows.Forms.MessageBox.Show(string)"/>, but the method does not rethrow them.</remarks>
-        /// <typeparam name="T">The type of the object to map the database record to. Must have a parameterless constructor.</typeparam>
-        /// <param name="ID">The unique identifier of the record to retrieve. This parameter is not directly used in the method but can
-        /// be included in the query or parameters.</param>
-        /// <param name="connectionString">The connection string used to establish a connection to the database. Cannot be null or empty.</param>
-        /// <param name="qry">The SQL query to execute for retrieving the record. The query should be parameterized to prevent SQL
-        /// injection.</param>
-        /// <param name="parameters">A dictionary of parameter names and values to be used with the SQL query. Can be null if the query does not
-        /// require parameters.</param>
-        /// <returns>An object of type <typeparamref name="T"/> representing the retrieved record, or the default value of
-        /// <typeparamref name="T"/> if no record is found or an error occurs.</returns>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="connectionString"></param>
+        /// <param name="qry"></param>
+        /// <param name="parameters"></param>
+        /// <returns></returns>
+        /// <exception cref="Exception"></exception>
+        /// <exception cref="DataReadException"></exception>
+        public static async Task<T?> GetRecordAsync<T>(
+            string connectionString,
+            string qry,
+            object? parameters = null) where T : new()
+        {
+            using var conn = new SqlConnection(connectionString);
+            try
+            {
+                // QueryFirstOrDefaultAsync returns the first row mapped to T, 
+                // or the default value (null for classes) if no rows are found.
+                return await conn.QueryFirstOrDefaultAsync<T>(qry, parameters);
+            }
+            catch (SqlException ex)
+            {
+                throw new Exception(GetSqlErrorMessage(ex, conn), ex);
+            }
+            catch (Exception ex)
+            {
+                throw new DataReadException($"Unable to read data: {ex.Message}", ex);
+            }
+        }
+
+        /// <summary>
+        /// Gets a record from a table
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="connectionString"></param>
+        /// <param name="qry"></param>
+        /// <param name="parameters"></param>
+        /// <returns></returns>
         public static async Task<T?> GetRecordAsync<T>(
             string connectionString,
             string qry,
             Dictionary<string, object>? parameters = null) where T : new()
         {
-            using (SqlConnection conn = new SqlConnection(connectionString))
-            {
-                try
-                {
-                    await conn.OpenAsync();
-                }
-                catch (SqlException ex)
-                {
-                    throw new Exception(GetSqlErrorMessage(ex, conn), ex); // Rethrow to let the caller know it failed
-                }
-                catch (Exception ex)
-                {
-                    throw new DataReadException($"Unable to open table. {ex}", ex);
-                }
-
-                try
-                {
-                    using (SqlCommand cmd = new SqlCommand(qry, conn))
-                    {
-                        cmd.ConfigureCommand(parameters);
-                        using (SqlDataReader reader = await cmd.ExecuteReaderAsync())
-                        {
-                            if (await reader.ReadAsync())
-                            {
-                                return reader.ToObject<T>();
-                            }
-                        }
-                    }
-                }
-                catch (SqlException ex)
-                {
-                    throw new Exception(GetSqlErrorMessage(ex, conn), ex); // Rethrow to let the caller know it failed
-                }
-                catch (Exception ex)
-                {
-                    throw new DataReadException($"Unable to read data: {ex}", ex);
-                }
-            }
-
-            return default;
+            // Simply forwards the call to the object-based overload
+            return await GetRecordAsync<T>(connectionString, qry, (object?)parameters);
         }
 
         /// <summary>
-        /// Executes the specified SQL query asynchronously and retrieves a list of records mapped to the specified
-        /// type.
+        /// Asynchronously executes the specified SQL query and returns a list of records mapped to the specified type.
         /// </summary>
-        /// <remarks>This method opens a database connection, executes the provided query, and maps the
-        /// results to objects of type <typeparamref name="T"/>. Ensure that the type <typeparamref name="T"/> has a
-        /// parameterless constructor and that the query results can be mapped to its properties.</remarks>
-        /// <typeparam name="T">The type of objects to map the query results to. Must have a parameterless constructor.</typeparam>
-        /// <param name="connectionString">The connection string used to establish a connection to the database.</param>
-        /// <param name="qry">The SQL query to execute. The query can include parameter placeholders.</param>
-        /// <param name="parameters">A dictionary of parameter names and their corresponding values to be used in the query.  The keys should
-        /// match the parameter placeholders in the query.</param>
-        /// <returns>A task that represents the asynchronous operation. The task result contains a list of objects of type
-        /// <typeparamref name="T"/>  populated with the data retrieved from the query. If no records are found, an
-        /// empty list is returned.</returns>
+        /// <remarks>This method uses Dapper for object mapping and query execution. The caller is
+        /// responsible for ensuring that the query and parameters are valid for the target database. The method opens
+        /// and closes the database connection automatically.</remarks>
+        /// <typeparam name="T">The type to which each record in the result set will be mapped. Must have a parameterless constructor.</typeparam>
+        /// <param name="connectionString">The connection string used to establish a connection to the SQL database.</param>
+        /// <param name="qry">The SQL query to execute against the database. The query should return rows compatible with the type
+        /// parameter <typeparamref name="T"/>.</param>
+        /// <param name="parameters">An object containing the parameters to be passed to the SQL query, or <see langword="null"/> if the query
+        /// does not require parameters.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains a list of records of type
+        /// <typeparamref name="T"/> returned by the query. If no records are found, the list will be empty.</returns>
         public static async Task<List<T>> GetRecordsAsync<T>(
             string connectionString,
             string qry,
-            Dictionary<string, object>? parameters = null) where T : new()
+            object? parameters = null) where T : new()
         {
-            List<T> results = new List<T>();
-
-            using (SqlConnection conn = new SqlConnection(connectionString))
-            {
-                try
-                {
-                    await conn.OpenAsync();
-                }
-                catch (SqlException ex)
-                {
-                    throw new Exception(GetSqlErrorMessage(ex, conn), ex); // Rethrow to let the caller know it failed
-                }
-                catch (Exception ex)
-                {
-                    throw new DataReadException($"Unable to open table: {ex}");
-                }
-
-                try
-                {
-                    using (SqlCommand cmd = new SqlCommand(qry, conn))
-                    {
-                        cmd.ConfigureCommand(parameters);
-                        using (SqlDataReader reader = await cmd.ExecuteReaderAsync())
-                        {
-                            while (await reader.ReadAsync())
-                            {
-                                results.Add(reader.ToObject<T>());
-                            }
-                        }
-                    }
-                }
-                catch (SqlException ex)
-                {
-                    throw new Exception(GetSqlErrorMessage(ex, conn), ex); // Rethrow to let the caller know it failed
-                }
-                catch (Exception ex)
-                {
-                    throw new DataReadException($"Unable to read data: {ex}");
-                }
-            }
-
-            return results;
+            using var conn = new SqlConnection(connectionString);
+            return (await conn.QueryAsync<T>(qry, parameters)).ToList();
         }
 
         /// <summary>
-        /// Asynchronously executes a non-query SQL command (INSERT, UPDATE, DELETE) with parameters.
+        /// Asynchronously retrieves a list of records from the database and maps each result to an instance of type
+        /// <typeparamref name="T"/>.
         /// </summary>
-        /// <param name="connectionString">The database connection string.</param>
-        /// <param name="qry">The SQL command to execute.</param>
-        /// <param name="parameters">A dictionary of parameter names and values (can be null).</param>
-        /// <returns>The number of rows affected, or -1 if an error occurs.</returns>
+        /// <typeparam name="T">The type to which each database record will be mapped. Must have a parameterless constructor.</typeparam>
+        /// <param name="connectionString">The connection string used to establish a connection to the database.</param>
+        /// <param name="qry">The SQL query to execute for retrieving records.</param>
+        /// <param name="parameters">An optional dictionary of parameter names and values to be applied to the SQL query. If null, the query is
+        /// executed without parameters.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains a list of mapped records of type
+        /// <typeparamref name="T"/>. If no records are found, the list will be empty.</returns>
+        public static async Task<List<T>> GetRecordsAsync<T>(
+        string connectionString,
+        string qry,
+        Dictionary<string, object>? parameters = null) where T : new()
+        {
+            // We simply cast or pass the dictionary to the object version
+            return await GetRecordsAsync<T>(connectionString, qry, (object?)parameters);
+        }
+
+        /// <summary>
+        /// Executes a SQL command asynchronously and returns the number of affected rows.
+        /// </summary>
+        /// <param name="connectionString">The connection string used to establish a connection to the database.</param>
+        /// <param name="qry">The SQL query to execute.</param>
+        /// <param name="parameters">An optional object containing the parameters to be passed to the SQL query.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the number of rows affected by the query.</returns>
+        /// <exception cref="Exception"></exception>
+        public static async Task<int> ExecuteSqlAsync(
+            string connectionString,
+            string qry,
+            object? parameters = null)
+        {
+            using var conn = new SqlConnection(connectionString);
+            try
+            {
+                return await conn.ExecuteAsync(qry, parameters);
+            }
+            catch (SqlException ex)
+            {
+                throw new Exception(GetSqlErrorMessage(ex, conn), ex);
+            }
+            catch (Exception) // Return -1 if error is not Sql related
+            {
+                return -1;
+            }
+        }
+
+        /// <summary>
+        /// Executes a SQL command asynchronously and returns the number of affected rows.
+        /// </summary>
+        /// <param name="connectionString">The connection string used to establish a connection to the database.</param>
+        /// <param name="qry">The SQL query to execute.</param>
+        /// <param name="parameters">An optional object containing the parameters to be passed to the SQL query.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the number of rows affected by the query.</returns>
         public static async Task<int> ExecuteSqlAsync(
             string connectionString,
             string qry,
             Dictionary<string, object>? parameters = null)
         {
-            using (var conn = new SqlConnection(connectionString))
-            using (var cmd = new SqlCommand(qry, conn))
-            {
-                cmd.ConfigureCommand(parameters);
-
-                try
-                {
-                    await conn.OpenAsync();
-                    return await cmd.ExecuteNonQueryAsync();
-                }
-                catch (SqlException ex)
-                {
-                    throw new Exception(GetSqlErrorMessage(ex, conn), ex); // Rethrow to let the caller know it failed
-                }
-                catch (Exception)
-                {
-                    return -1;
-                }
-            }
+            return await ExecuteSqlAsync(connectionString, qry, (object?)parameters);
         }
     }
 }

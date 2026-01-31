@@ -1,4 +1,5 @@
-﻿using Microsoft.Data.SqlClient;
+﻿using Dapper;
+using Microsoft.Data.SqlClient;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -35,8 +36,8 @@ namespace Czemi.DataMethods
         /// <exception cref="Exception">Thrown if validation fails for any row, if the connection string or table name is invalid, or if a database
         /// error occurs during the insert operation.</exception>
         public static async Task SqlBulkInsertAsync(
-            this DataTable dataTable,
-            string _connectionString,
+            string connectionString,
+            DataTable dataTable,
             string destinationTableName,
             IEnumerable<string>? columnsToSkip = null,
             bool useInternalSafety = false,
@@ -57,12 +58,21 @@ namespace Czemi.DataMethods
                 }
             }
 
+            var autoSkips = GetReadOnlyColumns(connectionString, destinationTableName);
+
+            // B. Combine them with any manual skips provided by the user
+            var finalSkipList = new HashSet<string>(autoSkips, StringComparer.OrdinalIgnoreCase);
+            if (columnsToSkip != null)
+            {
+                foreach (var col in columnsToSkip) finalSkipList.Add(col);
+            }
+
             SqlBulkCopyOptions options = useInternalSafety
                 ? (SqlBulkCopyOptions.FireTriggers | SqlBulkCopyOptions.CheckConstraints)
                 : SqlBulkCopyOptions.Default;
 
             // All or nothing transactions
-            using (var connection = new SqlConnection(_connectionString))
+            using (var connection = new SqlConnection(connectionString))
             {
                 await connection.OpenAsync();
                 using (var transaction = connection.BeginTransaction())
@@ -78,11 +88,8 @@ namespace Czemi.DataMethods
                             // Automatically map columns by name
                             foreach (DataColumn column in dataTable.Columns)
                             {
-                                bool shouldSkip = columnsToSkip?.Any(s => s.Equals(column.ColumnName, StringComparison.OrdinalIgnoreCase)) ?? false;
-                                if (shouldSkip)
-                                {
-                                    continue; // Skip this column
-                                }
+                                if (finalSkipList.Contains(column.ColumnName))
+                                    continue;
                                 bulkCopy.ColumnMappings.Add(column.ColumnName, column.ColumnName);
                             }
                             // ... setup bulkCopy ...
@@ -103,6 +110,21 @@ namespace Czemi.DataMethods
                         throw;
                     }
                 }
+            }
+        }
+
+        private static List<string> GetReadOnlyColumns(string connectionString, string tableName)
+        {
+            using (var conn = new SqlConnection(connectionString))
+            {
+                string sql = @"
+                    SELECT name 
+                    FROM sys.columns 
+                    WHERE object_id = OBJECT_ID(@tableName) 
+                    AND (is_identity = 1 OR is_computed = 1)";
+
+                conn.Open();
+                return conn.Query<string>(sql, new { tableName }).ToList();
             }
         }
     }

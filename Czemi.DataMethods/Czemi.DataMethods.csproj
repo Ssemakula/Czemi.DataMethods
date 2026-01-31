@@ -13,11 +13,12 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>SQL Database Data</PackageTags>
     <ApplicationIcon>Czemi_Maissan128.ico</ApplicationIcon>
-    <Version>1.1.0</Version>
-    <PackageReleaseNotes>First edition</PackageReleaseNotes>
+    <Version>1.2.0</Version>
+    <PackageReleaseNotes>Changed to use Dapper and SqlClient</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.66" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.4" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.2" />
   </ItemGroup>
